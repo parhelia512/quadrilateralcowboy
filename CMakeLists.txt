@@ -461,6 +461,7 @@ IF(WIN32)
 		sys/win32/win_syscon.cpp
 		sys/win32/win_taskkeyhook.cpp
 		sys/win32/win_wndproc.cpp
+		sys/win32/miniz.c
 	)
 ELSE()
 	SET(QC_SRC

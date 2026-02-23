@@ -40,6 +40,17 @@ If you have questions concerning this license or the applicable additional terms
 #endif
 #include <ShellAPI.h>
 
+// flibit added these to backport Skin Deep's crash handler
+#include <shlobj.h>
+#include "rc/resource.h"
+#include <DbgHelp.h>
+#include <winnt.h>
+#include <commdlg.h>
+#include <ctime>
+#include <thread>
+#include "miniz.h"
+#include "framework/Session_local.h"
+
 #ifndef __MRC__
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -890,6 +901,7 @@ void Sys_In_Restart_f( const idCmdArgs &args ) {
 Sys_AsyncThread
 ==================
 */
+extern int SEH_Filter( _EXCEPTION_POINTERS* ex, bool isMainThread = true );
 static void Sys_AsyncThread( void *parm ) {
 #if ENABLE_FP_EXCEPTIONS
 	FPExceptionEnabler enabled(_EM_UNDERFLOW | _EM_OVERFLOW | _EM_ZERODIVIDE | _EM_INVALID);
@@ -921,7 +933,13 @@ static void Sys_AsyncThread( void *parm ) {
 #endif
 
 
-		common->Async();
+		// SKINDEEP // SM: On Windows, AsyncTimer should use __try/__except to catch crashes
+		__try {
+			common->Async();
+		}
+		__except ( SEH_Filter( GetExceptionInformation(), false ) ) {
+			__debugbreak();
+		}
 	}
 }
 
@@ -1189,6 +1207,333 @@ void Win_Frame( void ) {
 		win32.win_viewlog.ClearModified();
 	}
 }
+
+
+
+// ==========================================================================================
+// SM: Added code to catch exceptions and generate a stack trace in both the log and a dialog
+static mz_bool AddFileToZip( mz_zip_archive* zip, const char* fileName )
+{
+	FILE* file = fopen( fileName, "rb" );
+	if ( !file )
+	{
+		return MZ_FALSE;
+	}
+
+	fclose( file );
+	return mz_zip_writer_add_file( zip, fileName, fileName, nullptr, 0, 9 );
+}
+
+idStr outputMsg;
+
+static _EXCEPTION_POINTERS* crashExPtr = nullptr;
+BOOL CALLBACK CrashHandlerProc( HWND hwndDlg, UINT message, WPARAM wParam, LPARAM lParam )
+{
+	switch ( message )
+	{
+	case WM_INITDIALOG:
+		{
+			HWND hwndOwner;
+			RECT rc, rcDlg, rcOwner;
+			// Get the owner window and dialog box rectangles. 
+			if ( ( hwndOwner = GetParent( hwndDlg ) ) == NULL )
+			{
+				hwndOwner = GetDesktopWindow();
+			}
+
+			GetWindowRect( hwndOwner, &rcOwner );
+			GetWindowRect( hwndDlg, &rcDlg );
+			CopyRect( &rc, &rcOwner );
+
+			// Offset the owner and dialog box rectangles so that right and bottom 
+			// values represent the width and height, and then offset the owner again 
+			// to discard space taken up by the dialog box. 
+
+			OffsetRect( &rcDlg, -rcDlg.left, -rcDlg.top );
+			OffsetRect( &rc, -rc.left, -rc.top );
+			OffsetRect( &rc, -rcDlg.right, -rcDlg.bottom );
+
+			// The new position is the sum of half the remaining space and the owner's 
+			// original position. 
+
+			SetWindowPos( hwndDlg,
+				HWND_TOP,
+				rcOwner.left + ( rc.right / 2 ),
+				rcOwner.top + ( rc.bottom / 2 ),
+				0, 0,          // Ignores size arguments. 
+				SWP_NOSIZE );
+
+			// Setup the stack frame message
+			idStr* inMsg = ( idStr* )lParam;
+			inMsg->Replace( "\n", "\r\n" );
+			SetDlgItemText( hwndDlg, IDC_STACK, inMsg->c_str() );
+
+			FILE* crashFile = fopen( "crashinfo.txt", "w" );
+			fprintf( crashFile, inMsg->c_str() );
+			fclose( crashFile );
+
+			SendDlgItemMessage(hwndDlg, IDC_ERRORICON, STM_SETICON, (WPARAM)LoadIcon( nullptr, IDI_ERROR ), 0);
+
+#if 0 // We're native, so whatever... -flibit
+			if (common && common->g_SteamUtilities && common->g_SteamUtilities->IsOnSteamDeck())
+			{
+				HWND breakButton = GetDlgItem(hwndDlg, IDC_BREAK);
+				ShowWindow(breakButton, SW_HIDE);
+
+				HWND dumpButton = GetDlgItem(hwndDlg, IDC_DUMP);
+				ShowWindow(dumpButton, SW_HIDE);
+			}
+			return TRUE;
+#endif
+		}
+	case WM_COMMAND:
+		switch ( LOWORD( wParam ) )
+		{
+		case IDC_BREAK:
+		{
+			__debugbreak();
+			return TRUE;
+		}
+		case IDC_COPY:
+		{
+			idStr crashStr = sessLocal.GetSanitizedURLArgument(outputMsg);
+			idStr locationStr = sessLocal.GetPlayerLocationString();
+			idStr URL = idStr::Format("https://docs.google.com/forms/d/e/1FAIpQLScejbJ0SFfkHb0iWhFagXAikLwnyHOSie-n7tHUtFheFQ6oiQ/viewform?usp=dialog&entry.561524408=%s&entry.1770058426=%s", locationStr.c_str(), crashStr.c_str());
+#if 0 // We're native, so whatever... -flibit
+			if (common && common->g_SteamUtilities && common->g_SteamUtilities->IsOnSteamDeck())
+			{
+				common->g_SteamUtilities->OpenSteamOverlaypage(URL.c_str());
+			}
+			else
+#endif
+			{
+				ShellExecute(nullptr, nullptr, URL.c_str(), nullptr, nullptr, SW_SHOW);
+			}
+
+			return TRUE;
+		}
+		case IDC_DUMP:
+		{
+			// Create the crash dump file
+			HANDLE dmpFile = CreateFile( "skindeep.dmp", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+				FILE_ATTRIBUTE_NORMAL, NULL );
+			MINIDUMP_EXCEPTION_INFORMATION dumpInfo;
+			dumpInfo.ThreadId = GetCurrentThreadId();
+			dumpInfo.ExceptionPointers = crashExPtr;
+			dumpInfo.ClientPointers = TRUE;
+
+			int dumpFlags = MiniDumpNormal
+				| MiniDumpWithIndirectlyReferencedMemory
+				| MiniDumpWithDataSegs
+				| MiniDumpWithHandleData
+				| MiniDumpWithUnloadedModules
+				| MiniDumpWithProcessThreadData
+				| MiniDumpWithThreadInfo
+				| MiniDumpIgnoreInaccessibleMemory;
+			
+			MiniDumpWriteDump( GetCurrentProcess(), GetCurrentProcessId(), dmpFile, ( MINIDUMP_TYPE )dumpFlags,
+				&dumpInfo, NULL, NULL );
+			CloseHandle( dmpFile );
+
+			// Get the current time
+			time_t currTime = std::time( nullptr );
+			char dateStr[256];
+			strftime( dateStr, 256, "%F-%H-%M-%S", std::localtime( &currTime ) );
+
+			// Have to save the original CWD as the path will change after the save file dialog
+			char originalCWD[1024];
+			GetCurrentDirectory( 1024, originalCWD );
+
+			// Create a save file dialog
+			const int MAX_ZIP_NAME = 1024;
+			char fileName[MAX_ZIP_NAME];
+			
+			idStr::snPrintf( fileName, MAX_ZIP_NAME, "SkinDeep-Crash-%s.zip", dateStr );
+			OPENFILENAME openInfo;
+			ZeroMemory( &openInfo, sizeof( openInfo ) );
+			openInfo.lStructSize = sizeof( OPENFILENAME );
+			openInfo.hwndOwner = hwndDlg;
+			openInfo.lpstrFilter = "ZIP file (*.zip)\0*.ZIP\0";
+			openInfo.lpstrFile = fileName;
+			openInfo.nMaxFile = MAX_ZIP_NAME;
+			if ( GetSaveFileName( &openInfo ) )
+			{
+				IProgressDialog *pd;
+				HRESULT hr;
+				hr = CoCreateInstance( CLSID_ProgressDialog, NULL, CLSCTX_INPROC_SERVER,
+					IID_IProgressDialog, ( LPVOID * )( &pd ) );
+				pd->SetTitle( L"Saving crash dump..." );
+				pd->StartProgressDialog( hwndDlg, NULL,
+					PROGDLG_MODAL | PROGDLG_NOTIME | PROGDLG_NOMINIMIZE | PROGDLG_NOCANCEL | PROGDLG_MARQUEEPROGRESS,
+					NULL );
+				// Set back to original CWD
+				SetCurrentDirectory( originalCWD );
+
+				std::thread zipThread( [&openInfo, pd, hwndDlg]() {
+					mz_zip_archive zip;
+					memset( &zip, 0, sizeof( zip ) );
+					mz_bool success = MZ_TRUE;
+					idStr errorMsg;
+					if ( mz_zip_writer_init_file( &zip, openInfo.lpstrFile, 0 ) )
+					{
+						success &= AddFileToZip( &zip, "crashinfo.txt" );
+						if (!success && errorMsg.Length() == 0)
+							errorMsg = "Failed to add crashinfo.txt to zip";
+						
+						success &= AddFileToZip( &zip, "skindeep.pdb" );
+						if (!success && errorMsg.Length() == 0)
+							errorMsg = "Failed to add skindeep.pdb to zip";
+						
+						success &= AddFileToZip( &zip, "skindeep.dmp" );
+						if (!success && errorMsg.Length() == 0)
+							errorMsg = "Failed to add skindeep.dmp to zip";
+						
+						success &= AddFileToZip( &zip, "skindeep.exe" );
+						if (!success && errorMsg.Length() == 0)
+							errorMsg = "Failed to add skindeep.exe to zip";
+						
+						success &= mz_zip_writer_finalize_archive( &zip );
+						if (!success && errorMsg.Length() == 0)
+							errorMsg = "Failed to finalize zip archive";
+						
+						success &= mz_zip_writer_end( &zip );
+						if (!success && errorMsg.Length() == 0)
+							errorMsg = "Failed to close zip file writer";
+					}
+					else
+					{
+						errorMsg = idStr::Format("Could not create zip file: '%s'", openInfo.lpstrFile);
+						success = MZ_FALSE;
+					}
+
+					pd->StopProgressDialog();
+					pd->Release();
+
+					if (!success)
+					{
+						idStr msgBox = idStr::Format("Failed to save crash dump with error: %s. Try to SAVE CRASH DUMP again.", errorMsg.c_str());
+						MessageBox(hwndDlg, msgBox.c_str(), NULL, MB_OK);
+					}
+				});
+
+				zipThread.detach();
+			}
+			return TRUE;
+		}
+		case IDOK:
+		case IDCANCEL:
+			EndDialog( hwndDlg, wParam );
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+int SEH_Filter( _EXCEPTION_POINTERS* ex, bool isMainThread = true )
+{
+	static const int MAX_STACK_COUNT = 64;
+	void* stack[MAX_STACK_COUNT];
+	unsigned short frames;
+	SYMBOL_INFO* symbol;
+	HANDLE process;
+
+	crashExPtr = ex;
+
+	disableAssertPrintf = true;
+
+	idCVar* versionCvar = cvarSystem->Find( "g_version" );
+	outputMsg += "Build: ";
+	outputMsg += versionCvar->GetString();
+	outputMsg += '\n';
+
+	outputMsg += "==================FATAL ERROR====================\n";
+	outputMsg += idStr::Format( "UNHANDLED EXCEPTION: 0x%X\n", ex->ExceptionRecord->ExceptionCode );
+	outputMsg += idStr::Format("OCCURRED AT: %s\n", Sys_TimeStampToStr(Sys_GetTime()));
+
+	process = GetCurrentProcess();
+
+	SymInitialize( process, NULL, TRUE );
+
+	frames = CaptureStackBackTrace( 0, 100, stack, NULL );
+	symbol = ( SYMBOL_INFO* )calloc( sizeof( SYMBOL_INFO ) + 256 * sizeof( char ), 1 );
+	symbol->MaxNameLen = 255;
+	symbol->SizeOfStruct = sizeof( SYMBOL_INFO );
+
+	IMAGEHLP_LINE64* line = ( IMAGEHLP_LINE64* )malloc( sizeof( IMAGEHLP_LINE64 ) );
+	DWORD displacement;
+
+	outputMsg += idStr::Format( "===================CALL STACK====================\n" );
+	idStrList stackFrames;
+	for ( int i = 1; i < frames; i++ )
+	{
+		SymFromAddr( process, ( DWORD64 )( stack[i] ), 0, symbol );
+
+		memset( line, 0, sizeof( IMAGEHLP_LINE64 ) );
+		line->SizeOfStruct = sizeof( IMAGEHLP_LINE64 );
+		if ( SymGetLineFromAddr64( process, ( DWORD64 )( stack[i] ), &displacement, line ) )
+		{
+			stackFrames.Append( idStr::Format( "%i: %s - %s:%lu\n", frames - i - 1, symbol->Name, line->FileName, line->LineNumber ));
+		}
+		else
+		{
+			stackFrames.Append( idStr::Format( "%i: %s - 0x%0llX\n", frames - i - 1, symbol->Name, symbol->Address ) );
+		}
+	}
+
+	// Try to see if we can find the exception handler frame and omit everything above it
+	int userExceptionIdx = -1;
+	for ( int i = 0; i < stackFrames.Num(); i++ )
+	{
+		if ( stackFrames[i].Find( "KiUserExceptionDispatcher" ) != -1 )
+		{
+			userExceptionIdx = i;
+			break;
+		}
+	}
+
+	for ( int i = userExceptionIdx + 1; i < stackFrames.Num(); i++ )
+	{
+		outputMsg += stackFrames[i];
+	}
+
+	outputMsg += "===================RECENT LOG====================\n";
+
+	outputMsg += console->GetLastLines(win_dumploglines.GetInteger(), true);
+
+	outputMsg += "====================HARDWARE=====================\n";
+
+	idStr cpuVendor, cpuBrand;
+	idLib::sys->GetCPUInfo( cpuVendor, cpuBrand );
+
+	outputMsg += idStr::Format( "CPU: %s; %s\n", cpuVendor.c_str(), cpuBrand.c_str() );
+
+	outputMsg += idStr::Format( "Total Memory (MB): %d\n", SDL_GetSystemRAM() );
+
+	outputMsg += idStr::Format( "GPU: %s; %s; %s\n", glConfig.vendor_string, glConfig.renderer_string, glConfig.version_string );
+
+	outputMsg += "=================================================\n";
+
+	// If this handler gets called from the non-main thread, using common->Printf may hang
+	if ( isMainThread ) {
+		common->Printf( outputMsg.c_str() );
+
+		// Close the game window
+		GLimp_Shutdown();
+	}
+
+	PlaySound( "SystemExclamation", NULL, SND_ALIAS );
+
+	// Show dialog box
+	DialogBoxParam( GetModuleHandle( NULL ), MAKEINTRESOURCE( IDD_CRASHHANDLER ), GetActiveWindow(), ( DLGPROC )CrashHandlerProc, ( LPARAM )&outputMsg );
+
+	free( symbol );
+	free( line );
+
+	return EXCEPTION_EXECUTE_HANDLER;
+}
+
+// SM: End code for stack traces/catch exceptions
+// ==========================================================================================
 
 extern "C" { void _chkstk( int size ); };
 void clrstk( void );
