@@ -5273,6 +5273,60 @@ gameState_t	idGameLocal::GameState( void ) const {
 	return gamestate;
 }
 
+//BC 4-16-2026 Load additional entities via a separate file.
+//We don't want to mess with the original .map files, because doing so
+//would potentially cause problems with old savegame files. So, spawn
+//additional entities defined via a separate .ent file.
+void idGameLocal::SpawnEntFile(void)
+{
+	//only do this for commentary mode. This is mostly for
+	//reducing possibility of potential bugs in the base game.
+	if (!g_commentary.GetBool())
+	{
+		return;
+	}
+
+	if (mapFile == NULL) {
+		Printf("No mapfile present\n");
+		return;
+	}
+
+	idLexer src(LEXFL_NOSTRINGCONCAT | LEXFL_NOSTRINGESCAPECHARS | LEXFL_ALLOWPATHNAMES);
+	idToken token;
+	int entCount;
+
+	idStr entFilename = mapFile->GetName();
+	entFilename.StripFileExtension();
+	entFilename.ToLower();
+	entFilename.SetFileExtension("ent"); //load special .ent file
+
+	src.LoadFile(entFilename, false);
+	if (!src.IsLoaded())
+	{
+		return; //No .ent file found. Exit early.
+	}
+
+	entCount = 0;
+	while (1)
+	{
+		idMapEntity *mapEnt;
+		idDict		args;
+
+		mapEnt = idMapEntity::Parse(src);
+		if (!mapEnt) {
+			break;
+		}
+
+		//Spawn the entity.
+		args = mapEnt->epairs;
+		CacheDictionaryMedia(&args);
+		SpawnEntityDef(args);
+		entCount++;
+	}
+
+	common->Printf("Loaded .ent file '%s' (%d entities)\n", entFilename.c_str(), entCount);
+}
+
 /*
 ==============
 idGameLocal::SpawnMapEntities
@@ -5330,6 +5384,14 @@ void idGameLocal::SpawnMapEntities( void ) {
 	}
 
 	Printf( "...%i entities spawned, %i inhibited\n\n", num, inhibit );
+
+
+
+
+	//BC 4-16-2026
+	SpawnEntFile();
+
+
 }
 
 /*
