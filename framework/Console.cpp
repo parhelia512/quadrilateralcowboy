@@ -577,6 +577,42 @@ void idConsoleLocal::KeyDownEvent( int key ) {
 		return;
 	}
 
+	//BC 4-16-2026 copy to clipboard
+	//Copy last line of console to clipboard.
+	if (key == 'c' && idKeyInput::IsDown(K_CTRL)) 
+	{
+		idStr str;
+		str.ReAllocate(1 * LINE_WIDTH, false);
+
+		int line = current - 1;
+		int startIdx = line * LINE_WIDTH;
+		int endIdx = (line + 1) * LINE_WIDTH - 1;
+
+		while (endIdx > startIdx)
+		{
+			char c = static_cast< char >(text[endIdx]);
+
+			if (c && c != ' ') {
+				endIdx++;
+				break;
+			}
+
+			endIdx--;
+		}
+
+		for (int i = startIdx; i < endIdx; i++) {
+			char c = static_cast< char >(text[i]);
+			str.Append(c);
+		}
+
+		str.StripTrailingWhitespace();
+
+		if (!str.IsEmpty())
+		{
+			Sys_SetClipboardData(str);
+		}
+	}
+
 	// enter finishes the line
 	if ( key == K_ENTER || key == K_KP_ENTER ) {
 

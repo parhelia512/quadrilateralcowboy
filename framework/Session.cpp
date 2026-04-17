@@ -2432,7 +2432,7 @@ void idSessionLocal::PacifierUpdate() {
 	if ( guiLoading && bytesNeededForMapLoad ) {
 		float n = fileSystem->GetReadCount();
 		float pct = ( n / bytesNeededForMapLoad );
-		pct = idMath::ClampFloat( 0.0f, 100.0f, pct );
+		pct = idMath::ClampFloat( 0.0f, 1.0f, pct );
 		guiLoading->SetStateFloat( "map_loading", pct );
 		guiLoading->StateChanged( com_frameTime );
 	}
