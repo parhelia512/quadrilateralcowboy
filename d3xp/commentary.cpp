@@ -84,7 +84,7 @@ void idCommentaryNode::OnFrob( idEntity* activator )
 	else
 	{
 		//failed to load text.
-		gameLocal.GetLocalPlayer()->Event_hudMessage(va("Failed to find commentary text: %s\n", spawnArgs.GetString( "message" )));
+		gameLocal.GetLocalPlayer()->Event_hudMessage(va("Failed to find commentary text: '%s'\n", spawnArgs.GetString( "message" ) ));
 		return;
 	}
 

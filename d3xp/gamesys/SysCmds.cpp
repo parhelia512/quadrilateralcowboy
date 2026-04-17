@@ -761,7 +761,19 @@ void Cmd_GetViewpos_f( const idCmdArgs &args ) {
 
 	const renderView_t *view = player->GetRenderView();
 	if ( view ) {
-		gameLocal.Printf( "(%s) %.1f\n", view->vieworg.ToString(), view->viewaxis[0].ToYaw() );
+
+		if (args.Argc() >= 2)
+		{
+			//default.
+			gameLocal.Printf("(%s) %.1f\n", view->vieworg.ToString(), view->viewaxis[0].ToYaw());
+		}
+		else
+		{
+			//BC 4-16-2026 round to nearest int. This is to streamline the 2026 update commentary node placement.
+			gameLocal.Printf("%.0f %.0f %.0f\n", view->vieworg.x, view->vieworg.y, view->vieworg.z);
+		}		
+
+
 	} else {
 		player->GetViewPos( origin, axis );
 		gameLocal.Printf( "(%s) %.1f\n", origin.ToString(), axis[0].ToYaw() );
