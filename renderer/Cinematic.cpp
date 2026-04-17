@@ -179,7 +179,7 @@ void idCinematic::InitCinematic( void ) {
 		ROQ_YY_tab[i] = (int)( (i << 6) | (i >> 2) );
 	}
 
-	file = (byte *)Mem_Alloc( 65536 );
+	file = (byte *)Mem_Alloc( 65536 + 8); //BC 4-17-2025 allow higher-rez ROQ video playback
 	vq2 = (word *)Mem_Alloc( 256*16*4 * sizeof( word ) );
 	vq4 = (word *)Mem_Alloc( 256*64*4 * sizeof( word ) );
 	vq8 = (word *)Mem_Alloc( 256*256*4 * sizeof( word ) );
@@ -278,8 +278,9 @@ idCinematicLocal::idCinematicLocal() {
 	buf = NULL;
 	iFile = NULL;
 
-	qStatus[0] = (byte **)Mem_Alloc( 32768 * sizeof( byte *) );
-	qStatus[1] = (byte **)Mem_Alloc( 32768 * sizeof( byte *) );
+	//BC 4-17-2025 allow higher-rez ROQ video playback
+	qStatus[0] = (byte **)Mem_Alloc( 32768 * 4 * sizeof(byte *));
+	qStatus[1] = (byte **)Mem_Alloc( 32768 * 4 * sizeof(byte *));
 }
 
 /*
