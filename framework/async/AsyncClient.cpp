@@ -1916,19 +1916,24 @@ void idAsyncClient::PacifierUpdate( void ) {
 
 void idAsyncClient::SendBugreport(const char *text)
 {
+
 	//common->Printf("hi hi\n");
-	//sys->OpenURL( "http://blendogames.com/qc/reportabug.php", false );
+
+    //BC 4-28-2026 fall back to OpenURL, as the nicer backgroundDownload isn't working for some reason.
+	sys->OpenURL(va("http://blendogames.com/qc/reportabug.php?text=%s", text) , false );
+
+
 
 	//bc use doom3's file download system to send qc bug reports.
 
-	backgroundDownload.completed = false;
-	backgroundDownload.opcode = DLTYPE_URL;
-	backgroundDownload.f = NULL;
-	backgroundDownload.url.status = DL_WAIT;
-	backgroundDownload.url.dlnow = 0;
-	backgroundDownload.url.dltotal = 0;
-	backgroundDownload.url.url = va("http://blendogames.com/qc/reportabug.php?text=%s", text);
-	fileSystem->BackgroundDownload( &backgroundDownload );
+	//backgroundDownload.completed = false;
+	//backgroundDownload.opcode = DLTYPE_URL;
+	//backgroundDownload.f = NULL;
+	//backgroundDownload.url.status = DL_WAIT;
+	//backgroundDownload.url.dlnow = 0;
+	//backgroundDownload.url.dltotal = 0;
+	//backgroundDownload.url.url = va("http://blendogames.com/qc/reportabug.php?text=%s", text);
+	//fileSystem->BackgroundDownload( &backgroundDownload );
 }
 
 /*
